@@ -3,6 +3,7 @@ import re
 import multiprocessing
 import os.path as osp
 import gym
+import gym_physics
 from collections import defaultdict
 import tensorflow as tf
 import numpy as np
@@ -49,6 +50,8 @@ _game_envs['retro'] = {
     'SpaceInvaders-Snes',
 }
 
+_game_envs['physics'] = {'BouncingBall-v0'}
+
 
 def train(args, extra_args):
     env_type, env_id = get_env_type(args)
@@ -81,6 +84,28 @@ def train(args, extra_args):
     )
 
     return model, env
+
+
+def pretrain(args, extra_args):
+    env = build_env(args)
+    learn = get_alg_module(args.alg).prelearn
+
+    actions_file = open('/home/daniel/Work/actions.csv', 'r')
+    obs_file = open('/home/daniel/Work/states.csv', 'r')
+
+    import csv
+    actions_reader = csv.reader(actions_file)
+    obs_reader = csv.reader(obs_file)
+
+    actions = list(actions_reader)[:8192]
+    obs = list(obs_reader)[:8192]
+
+    actions_file.close()
+    obs_file.close()
+
+    print("obs: " + str(len(obs)))
+
+    learn('mlp', env, obs, actions)
 
 
 def build_env(args):
@@ -192,10 +217,8 @@ def parse_cmdline_kwargs(args):
     return {k: parse(v) for k,v in parse_unknown_args(args).items()}
 
 
-
 def main(args):
     # configure logger, disable logging in child MPI processes (with rank > 0)
-
     arg_parser = common_arg_parser()
     args, unknown_args = arg_parser.parse_known_args(args)
     extra_args = parse_cmdline_kwargs(unknown_args)
@@ -207,8 +230,16 @@ def main(args):
         logger.configure(format_strs=[])
         rank = MPI.COMM_WORLD.Get_rank()
 
+    # experiment with pretraining - Daniel
+    pretrain(args, extra_args)
+    return None
+
     model, env = train(args, extra_args)
 
+    # save model into logdir in any case -- Daniel
+    logdir = logger.get_dir()
+    save_path = osp.join(logdir, 'model.pkl')
+    model.save(save_path)
     if args.save_path is not None and rank == 0:
         save_path = osp.expanduser(args.save_path)
         model.save(save_path)
@@ -234,11 +265,11 @@ def main(args):
             if done:
                 print('episode_rew={}'.format(episode_rew))
                 episode_rew = 0
-                obs = env.reset()
+                #obs = env.reset()
 
     env.close()
 
     return model
 
 if __name__ == '__main__':
-    main(sys.argv)
+  main(sys.argv)

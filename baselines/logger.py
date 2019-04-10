@@ -228,6 +228,7 @@ def log(*args, level=INFO):
     """
     get_current().log(*args, level=level)
 
+
 def debug(*args):
     log(*args, level=DEBUG)
 
@@ -256,6 +257,10 @@ def get_dir():
     will be None if there is no output directory (i.e., if you didn't call start)
     """
     return get_current().get_dir()
+
+# Daniel
+def save_config(config):
+  Logger.CURRENT.save_config(config)
 
 record_tabular = logkv
 dump_tabular = dumpkvs
@@ -361,12 +366,20 @@ class Logger(object):
             if isinstance(fmt, SeqWriter):
                 fmt.writeseq(map(str, args))
 
+    # Save algo config -- added by Daniel
+    def save_config(self, config):
+        csvlogger = CSVOutputFormat(osp.join(self.dir, 'algo_config.csv'))
+        csvlogger.writekvs(config)
+
+
 def configure(dir=None, format_strs=None, comm=None):
     """
     If comm is provided, average all numerical stats across that comm
     """
     if dir is None:
         dir = os.getenv('OPENAI_LOGDIR')
+        dir = osp.join(dir,
+            datetime.datetime.now().strftime("openai-%Y-%m-%d-%H-%M-%S-%f"))
     if dir is None:
         dir = osp.join(tempfile.gettempdir(),
             datetime.datetime.now().strftime("openai-%Y-%m-%d-%H-%M-%S-%f"))

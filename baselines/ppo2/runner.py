@@ -1,5 +1,7 @@
 import numpy as np
+from baselines import logger
 from baselines.common.runners import AbstractEnvRunner
+import time
 
 class Runner(AbstractEnvRunner):
     """
@@ -35,7 +37,10 @@ class Runner(AbstractEnvRunner):
 
             # Take actions in env and look the results
             # Infos contains a ton of useful informations
+            t_start = time.time()
             self.obs[:], rewards, self.dones, infos = self.env.step(actions)
+            now = time.time()
+            print("step took: " + str(now-t_start))
             for info in infos:
                 maybeepinfo = info.get('episode')
                 if maybeepinfo: epinfos.append(maybeepinfo)

@@ -4,6 +4,8 @@ import functools
 from baselines.common.tf_util import get_session, save_variables, load_variables
 from baselines.common.tf_util import initialize
 
+from baselines import logger
+
 try:
     from baselines.common.mpi_adam_optimizer import MpiAdamOptimizer
     from mpi4py import MPI
@@ -21,12 +23,19 @@ class Model(object):
     train():
     - Make the training part (feedforward and retropropagation of gradients)
 
+    Modified by Daniel:
+    pretrain():
+    - Pre-train the policy network on recorded state/action pairs
+
     save/load():
     - Save load the model
     """
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
                 nsteps, ent_coef, vf_coef, max_grad_norm, microbatch_size=None):
         self.sess = sess = get_session()
+        # add a summary writer - Daniel
+        logdir = logger.get_dir()
+        self.writer = tf.summary.FileWriter(logdir, sess.graph)
 
         with tf.variable_scope('ppo2_model', reuse=tf.AUTO_REUSE):
             # CREATE OUR TWO MODELS
@@ -112,12 +121,14 @@ class Model(object):
         self.loss_names = ['policy_loss', 'value_loss', 'policy_entropy', 'approxkl', 'clipfrac']
         self.stats_list = [pg_loss, vf_loss, entropy, approxkl, clipfrac]
 
-
         self.train_model = train_model
         self.act_model = act_model
         self.step = act_model.step
         self.value = act_model.value
         self.initial_state = act_model.initial_state
+
+        self.pretrain_loss = tf.losses.mean_squared_error(train_model.pi, self.A)
+        self.pretrain_op = self.trainer.minimize(self.pretrain_loss, None, params)
 
         self.save = functools.partial(save_variables, sess=sess)
         self.load = functools.partial(load_variables, sess=sess)
@@ -126,6 +137,23 @@ class Model(object):
         global_variables = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="")
         if MPI is not None:
             sync_from_root(sess, global_variables) #pylint: disable=E1101
+
+        self.writer.add_graph(sess.graph)
+        self.writer.close()
+
+
+    # pretrain policy network on raw state-action pairs
+    def pretrain(self, obs, actions, lr):
+        feed_dict = {
+            self.train_model.X : obs,
+            self.LR : lr,
+            self.A : actions
+        }
+
+        self.sess.run(self.pretrain_op, feed_dict)
+        loss = self.sess.run(self.pretrain_loss, feed_dict)
+        print("Pretrain loss: " + str(loss))
+
 
     def train(self, lr, cliprange, obs, returns, masks, actions, values, neglogpacs, states=None):
         # Here we calculate advantage A(s,a) = R + yV(s') - V(s)

@@ -2,9 +2,11 @@ import os
 import time
 import numpy as np
 import os.path as osp
+import tensorflow as tf
 from baselines import logger
 from collections import deque
 from baselines.common import explained_variance, set_global_seeds
+from baselines.common.tf_util import get_session
 from baselines.common.policies import build_policy
 try:
     from mpi4py import MPI
@@ -18,12 +20,49 @@ def constfn(val):
         return val
     return f
 
-def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2048, ent_coef=0.0, lr=3e-4,
-            vf_coef=0.5,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
-            log_interval=10, nminibatches=4, noptepochs=4, cliprange=0.2,
-            save_interval=0, load_path=None, model_fn=None, **network_kwargs):
+
+def prelearn(network, env, trainX, trainY, seed=None, lr=3e-4):
+    set_global_seeds(seed)
+
+    policy = build_policy(env, network)
+
+    # Get state_space and action_space
+    ob_space = env.observation_space
+    ac_space = env.action_space
+
+    # Instantiate the model object (that creates act_model and train_model)
+    from baselines.ppo2.model import Model
+    model_fn = Model
+
+    batch_size = 32
+    ndata = len(trainX)
+    nepochs = 10
+
+    # Set up model with some dummy arguments
+    model = model_fn(policy=policy, ob_space=ob_space, ac_space=ac_space,
+                     nbatch_act=1, nbatch_train=batch_size,
+                    nsteps=8192, ent_coef=0.00, vf_coef=0.03,
+                    max_grad_norm=0.5)
+
+    for _ in range(nepochs):
+        for start in range(0, ndata, batch_size):
+            end = start + batch_size
+            obs = trainX[start:end]
+            actions = trainY[start:end]
+            model.pretrain(obs, actions, lr)
+
+    logdir = logger.get_dir()
+    model.save(osp.join(logdir, 'pretrained_model.pkl'))
+
+
+def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=8192, ent_coef=0.00, lr=3e-4,
+            vf_coef=0.6,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
+            log_interval=1, nminibatches=32, noptepochs=10, cliprange=0.3,
+            save_interval=5, load_path=None, model_fn=None, **network_kwargs):
     '''
     Learn policy using PPO algorithm (https://arxiv.org/abs/1707.06347)
+
+    Modified by Daniel Zvara (zvarad@ethz.ch)
 
     Parameters:
     ----------
@@ -76,6 +115,9 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2
 
 
     '''
+
+    # save algo config -- Daniel
+    logger.save_config(locals())
 
     set_global_seeds(seed)
 
@@ -191,6 +233,10 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2
                 logger.logkv('eval_eprewmean', safemean([epinfo['r'] for epinfo in eval_epinfobuf]) )
                 logger.logkv('eval_eplenmean', safemean([epinfo['l'] for epinfo in eval_epinfobuf]) )
             logger.logkv('time_elapsed', tnow - tfirststart)
+
+            # additional logs - Daniel (some code creds to Dongho)
+            logmetrics()
+
             for (lossval, lossname) in zip(lossvals, model.loss_names):
                 logger.logkv(lossname, lossval)
             if MPI is None or MPI.COMM_WORLD.Get_rank() == 0:
@@ -201,10 +247,25 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=2
             savepath = osp.join(checkdir, '%.5i'%update)
             print('Saving to', savepath)
             model.save(savepath)
+        # early stopping if reward drops under 1 -- Daniel
+        # if update % log_interval == 0 or update == 1:
+            # if safemean([epinfo['r'] for epinfo in epinfobuf]) < 0:
+                # print("Reward diverged, stopping!")
+                # break
+
     return model
 # Avoid division error when calculate the mean (in our case if epinfo is empty returns np.nan, not return an error)
 def safemean(xs):
     return np.nan if len(xs) == 0 else np.mean(xs)
 
+def logmetrics():
+    sess = get_session()
+
+    with tf.variable_scope("ppo2_model/pi", reuse=True):
+        noise_std = tf.get_variable(name='logstd')
+
+    noise = sess.run(noise_std)
+
+    logger.logkv("noise", safemean(np.exp(noise)))
 
 

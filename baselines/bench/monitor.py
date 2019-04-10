@@ -8,6 +8,10 @@ import csv
 import os.path as osp
 import json
 import numpy as np
+import tensorflow as tf
+
+# added by Daniel
+from baselines import logger
 
 class Monitor(Wrapper):
     EXT = "monitor.csv"
@@ -27,6 +31,7 @@ class Monitor(Wrapper):
         self.info_keywords = info_keywords
         self.allow_early_resets = allow_early_resets
         self.rewards = None
+        self.step_rewards = None
         self.needs_reset = True
         self.episode_rewards = []
         self.episode_lengths = []
@@ -47,6 +52,7 @@ class Monitor(Wrapper):
         if not self.allow_early_resets and not self.needs_reset:
             raise RuntimeError("Tried to reset an environment before done. If you want to allow early resets, wrap your env with Monitor(env, path, allow_early_resets=True)")
         self.rewards = []
+        self.step_rewards = []
         self.needs_reset = False
 
 
@@ -54,14 +60,22 @@ class Monitor(Wrapper):
         if self.needs_reset:
             raise RuntimeError("Tried to step environment that needs reset")
         ob, rew, done, info = self.env.step(action)
+
+        # log per-step parameters - Daniel
+        logger.logkv("step_reward", info["step_reward"])
+
         self.update(ob, rew, done, info)
+
+        logger.dumpkvs()
         return (ob, rew, done, info)
 
     def update(self, ob, rew, done, info):
         self.rewards.append(rew)
+        self.step_rewards.append(info["step_reward"])
         if done:
             self.needs_reset = True
             eprew = sum(self.rewards)
+            taskrew = sum(self.step_rewards)
             eplen = len(self.rewards)
             epinfo = {"r": round(eprew, 6), "l": eplen, "t": round(time.time() - self.tstart, 6)}
             for k in self.info_keywords:
@@ -76,7 +90,20 @@ class Monitor(Wrapper):
             if isinstance(info, dict):
                 info['episode'] = epinfo
 
+            # log per-episode stats -- Daniel
+            logger.logkv("terminal_reward", info["terminal_reward"])
+            logger.logkv("collected_termrew", info["collected_termrew"])
+            logger.logkv("task_reward", round(taskrew, 6))
+            logger.logkv("eprew", epinfo["r"])
+            logger.logkv("eplen", epinfo["l"])
+            logger.logkv("task_length", info["task_length"])
+
+            k = 1
+            mean_moving_normal = tf.random_normal(shape=[1000], mean=(5*k), stddev=1)
+            tf.summary.histogram("test_histogram", mean_moving_normal)
+
         self.total_steps += 1
+
 
     def close(self):
         if self.f is not None:
