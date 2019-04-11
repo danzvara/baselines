@@ -20,19 +20,20 @@ class Monitor(Wrapper):
     def __init__(self, env, filename, allow_early_resets=False, reset_keywords=(), info_keywords=()):
         Wrapper.__init__(self, env=env)
         self.tstart = time.time()
-        if filename:
-            self.results_writer = ResultsWriter(filename,
-                header={"t_start": time.time(), 'env_id' : env.spec and env.spec.id},
-                extra_keys=reset_keywords + info_keywords
-            )
-        else:
-            self.results_writer = None
+        self.results_writer = ResultsWriter(
+            filename,
+            header={"t_start": time.time(), 'env_id' : env.spec and env.spec.id},
+            extra_keys=reset_keywords + info_keywords
+        )
         self.reset_keywords = reset_keywords
         self.info_keywords = info_keywords
         self.allow_early_resets = allow_early_resets
         self.rewards = None
+        self.rewards_v = None
+        self.rewards_h = None
         self.step_rewards = None
         self.needs_reset = True
+        self.episode_actions = []
         self.episode_rewards = []
         self.episode_lengths = []
         self.episode_times = []
@@ -52,7 +53,10 @@ class Monitor(Wrapper):
         if not self.allow_early_resets and not self.needs_reset:
             raise RuntimeError("Tried to reset an environment before done. If you want to allow early resets, wrap your env with Monitor(env, path, allow_early_resets=True)")
         self.rewards = []
+        self.reward_h = []
+        self.reward_v = []
         self.step_rewards = []
+        self.episode_actions = []
         self.needs_reset = False
 
 
@@ -62,6 +66,7 @@ class Monitor(Wrapper):
         ob, rew, done, info = self.env.step(action)
 
         # log per-step parameters - Daniel
+        self.episode_actions.append(action[0])
         logger.logkv("step_reward", info["step_reward"])
 
         self.update(ob, rew, done, info)
@@ -72,9 +77,13 @@ class Monitor(Wrapper):
     def update(self, ob, rew, done, info):
         self.rewards.append(rew)
         self.step_rewards.append(info["step_reward"])
+        self.rewards_v.append(info['r_v'])
+        self.rewards_h.append(info['r_h'])
         if done:
             self.needs_reset = True
             eprew = sum(self.rewards)
+            eprew_h = sum(self.rewards_h)
+            eprew_v = sum(self.rewards_v)
             taskrew = sum(self.step_rewards)
             eplen = len(self.rewards)
             epinfo = {"r": round(eprew, 6), "l": eplen, "t": round(time.time() - self.tstart, 6)}
@@ -84,9 +93,8 @@ class Monitor(Wrapper):
             self.episode_lengths.append(eplen)
             self.episode_times.append(time.time() - self.tstart)
             epinfo.update(self.current_reset_info)
-            if self.results_writer:
-                self.results_writer.write_row(epinfo)
-            assert isinstance(info, dict)
+            self.results_writer.write_row(epinfo)
+
             if isinstance(info, dict):
                 info['episode'] = epinfo
 
@@ -95,12 +103,10 @@ class Monitor(Wrapper):
             logger.logkv("collected_termrew", info["collected_termrew"])
             logger.logkv("task_reward", round(taskrew, 6))
             logger.logkv("eprew", epinfo["r"])
+            logger.logkv("eprew_v", round(eprew_v, 6))
+            logger.logkv("eprew_h", round(eprew_h, 6))
             logger.logkv("eplen", epinfo["l"])
             logger.logkv("task_length", info["task_length"])
-
-            k = 1
-            mean_moving_normal = tf.random_normal(shape=[1000], mean=(5*k), stddev=1)
-            tf.summary.histogram("test_histogram", mean_moving_normal)
 
         self.total_steps += 1
 
@@ -126,26 +132,30 @@ class LoadMonitorResultsError(Exception):
 
 
 class ResultsWriter(object):
-    def __init__(self, filename, header='', extra_keys=()):
+    def __init__(self, filename=None, header='', extra_keys=()):
         self.extra_keys = extra_keys
-        assert filename is not None
-        if not filename.endswith(Monitor.EXT):
-            if osp.isdir(filename):
-                filename = osp.join(filename, Monitor.EXT)
-            else:
-                filename = filename + "." + Monitor.EXT
-        self.f = open(filename, "wt")
-        if isinstance(header, dict):
-            header = '# {} \n'.format(json.dumps(header))
-        self.f.write(header)
-        self.logger = csv.DictWriter(self.f, fieldnames=('r', 'l', 't')+tuple(extra_keys))
-        self.logger.writeheader()
-        self.f.flush()
+        if filename is None:
+            self.f = None
+            self.logger = None
+        else:
+            if not filename.endswith(Monitor.EXT):
+                if osp.isdir(filename):
+                    filename = osp.join(filename, Monitor.EXT)
+                else:
+                    filename = filename + "." + Monitor.EXT
+            self.f = open(filename, "wt")
+            if isinstance(header, dict):
+                header = '# {} \n'.format(json.dumps(header))
+            self.f.write(header)
+            self.logger = csv.DictWriter(self.f, fieldnames=('r', 'l', 't')+tuple(extra_keys))
+            self.logger.writeheader()
+            self.f.flush()
 
     def write_row(self, epinfo):
         if self.logger:
             self.logger.writerow(epinfo)
             self.f.flush()
+
 
 
 def get_monitor_files(dir):

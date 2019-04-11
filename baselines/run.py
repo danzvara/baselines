@@ -93,19 +93,46 @@ def pretrain(args, extra_args):
     actions_file = open('/home/daniel/Work/actions.csv', 'r')
     obs_file = open('/home/daniel/Work/states.csv', 'r')
 
+    actions_file_test = open('/home/daniel/Work/actions_test.csv', 'r')
+    obs_file_test = open('/home/daniel/Work/states_test.csv', 'r')
+
     import csv
     actions_reader = csv.reader(actions_file)
     obs_reader = csv.reader(obs_file)
 
-    actions = list(actions_reader)[:8192]
-    obs = list(obs_reader)[:8192]
+    actions_test_reader = csv.reader(actions_file_test)
+    obs_test_reader = csv.reader(obs_file_test)
+
+    actions = list(actions_reader)
+    obs = list(obs_reader)
 
     actions_file.close()
     obs_file.close()
 
-    print("obs: " + str(len(obs)))
+    obs = [list(map(float, l)) for l in obs]
 
-    learn('mlp', env, obs, actions)
+    normalized_actions = [[max(0, (float(a[0])/100))] for a in actions]
+    obs_mean = np.mean(obs, axis=0)
+    obs_std = np.std(obs, axis=0)
+
+    def norm(o, m, s):
+      return max(min((o - m)/s, 10), -10)
+
+    normalized_obs = [[norm(o[0], obs_mean[0], obs_std[0]), norm(o[1], obs_mean[1], obs_std[1])] for o in obs]
+
+    obs, actions = normalized_obs[:131072], normalized_actions[:131072]
+    obs_test, actions_test = list(obs_test_reader), [[max(0, (float(a[0])/100))] for a in list(actions_test_reader)]
+
+    print(obs_test[:100])
+    print(actions_test[:100])
+    data = list(zip(obs, actions))
+    np.random.shuffle(data)
+    obs, actions = zip(*data)
+
+    print("obs mean: " + str(obs_mean))
+    print("obs std: " + str(obs_std))
+
+    learn('mlp', env, obs, actions, obs_test, actions_test)
 
 
 def build_env(args):
@@ -231,8 +258,8 @@ def main(args):
         rank = MPI.COMM_WORLD.Get_rank()
 
     # experiment with pretraining - Daniel
-    pretrain(args, extra_args)
-    return None
+    # pretrain(args, extra_args)
+    # return None
 
     model, env = train(args, extra_args)
 

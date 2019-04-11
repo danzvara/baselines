@@ -21,7 +21,7 @@ def constfn(val):
     return f
 
 
-def prelearn(network, env, trainX, trainY, seed=None, lr=3e-4):
+def prelearn(network, env, trainX, trainY, testX, testY, seed=None, lr=3e-4):
     set_global_seeds(seed)
 
     policy = build_policy(env, network)
@@ -34,7 +34,7 @@ def prelearn(network, env, trainX, trainY, seed=None, lr=3e-4):
     from baselines.ppo2.model import Model
     model_fn = Model
 
-    batch_size = 32
+    batch_size = 128
     ndata = len(trainX)
     nepochs = 10
 
@@ -44,6 +44,7 @@ def prelearn(network, env, trainX, trainY, seed=None, lr=3e-4):
                     nsteps=8192, ent_coef=0.00, vf_coef=0.03,
                     max_grad_norm=0.5)
 
+    # train
     for _ in range(nepochs):
         for start in range(0, ndata, batch_size):
             end = start + batch_size
@@ -51,13 +52,26 @@ def prelearn(network, env, trainX, trainY, seed=None, lr=3e-4):
             actions = trainY[start:end]
             model.pretrain(obs, actions, lr)
 
+    # validate with MSE
+    pred_actions = []
+    for o in testX:
+      pred_actions.append(model.evaluate(o))
+    sse = 0
+    for pred_action, action in zip(pred_actions, testY):
+      sse += (action[0] - float(pred_action[0]))**2
+
+    mse = sse / len(pred_actions)
+
+    print(type(mse))
+    print("Validation loss (mse): " + str(mse))
     logdir = logger.get_dir()
     model.save(osp.join(logdir, 'pretrained_model.pkl'))
 
 
-def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=8192, ent_coef=0.00, lr=3e-4,
-            vf_coef=0.6,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
-            log_interval=1, nminibatches=32, noptepochs=10, cliprange=0.3,
+def learn(*, network, env, total_timesteps, eval_env = None, seed=None,
+            nsteps=2048, ent_coef=0.01, lr=3e-4,
+            vf_coef=0.9,  max_grad_norm=0.5, gamma=0.99, lam=0.95,
+            log_interval=1, nminibatches=64, noptepochs=8, cliprange=0.2,
             save_interval=5, load_path=None, model_fn=None, **network_kwargs):
     '''
     Learn policy using PPO algorithm (https://arxiv.org/abs/1707.06347)
@@ -118,6 +132,9 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=8
 
     # save algo config -- Daniel
     logger.save_config(locals())
+
+    # get summary writer
+    network_summary_writer = network_summary()
 
     set_global_seeds(seed)
 
@@ -202,6 +219,7 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=8
             envsperbatch = nenvs // nminibatches
             envinds = np.arange(nenvs)
             flatinds = np.arange(nenvs * nsteps).reshape(nenvs, nsteps)
+            envsperbatch = nbatch_train // nsteps
             for _ in range(noptepochs):
                 np.random.shuffle(envinds)
                 for start in range(0, nenvs, envsperbatch):
@@ -234,8 +252,10 @@ def learn(*, network, env, total_timesteps, eval_env = None, seed=None, nsteps=8
                 logger.logkv('eval_eplenmean', safemean([epinfo['l'] for epinfo in eval_epinfobuf]) )
             logger.logkv('time_elapsed', tnow - tfirststart)
 
-            # additional logs - Daniel (some code creds to Dongho)
+            # additional logs - Daniel (code creds to Dongho)
             logmetrics()
+            #network_summary_writer.add_summary(model.summary(obs[mbinds]), update)
+            #network_summary_writer.flush()
 
             for (lossval, lossname) in zip(lossvals, model.loss_names):
                 logger.logkv(lossname, lossval)
@@ -268,4 +288,7 @@ def logmetrics():
 
     logger.logkv("noise", safemean(np.exp(noise)))
 
-
+def network_summary():
+    """tf summary from network"""
+    writer = tf.summary.FileWriter(logger.get_dir() + '/tb/image')
+    return writer 

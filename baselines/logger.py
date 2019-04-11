@@ -260,7 +260,7 @@ def get_dir():
 
 # Daniel
 def save_config(config):
-  Logger.CURRENT.save_config(config)
+    get_current().save_config(config)
 
 record_tabular = logkv
 dump_tabular = dumpkvs

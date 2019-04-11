@@ -26,6 +26,8 @@ class Model(object):
     Modified by Daniel:
     pretrain():
     - Pre-train the policy network on recorded state/action pairs
+    evaluate():
+    - Run pretrained policy on test sample of observations
 
     save/load():
     - Save load the model
@@ -130,6 +132,8 @@ class Model(object):
         self.pretrain_loss = tf.losses.mean_squared_error(train_model.pi, self.A)
         self.pretrain_op = self.trainer.minimize(self.pretrain_loss, None, params)
 
+        self.summaries = tf.summary.merge_all()
+
         self.save = functools.partial(save_variables, sess=sess)
         self.load = functools.partial(load_variables, sess=sess)
 
@@ -153,6 +157,14 @@ class Model(object):
         self.sess.run(self.pretrain_op, feed_dict)
         loss = self.sess.run(self.pretrain_loss, feed_dict)
         print("Pretrain loss: " + str(loss))
+
+
+    def evaluate(self, obs):
+        feed_dict = {
+            self.train_model.X : obs
+        }
+
+        return self.act_model._evaluate([self.act_model.pi], obs)
 
 
     def train(self, lr, cliprange, obs, returns, masks, actions, values, neglogpacs, states=None):
@@ -182,3 +194,10 @@ class Model(object):
             td_map
         )[:-1]
 
+
+    def summary(self, obs):
+        feed_dict = {
+            self.train_model.X : obs,
+            self.act_model.X : obs
+        }
+        return self.sess.run(self.summaries, feed_dict)
