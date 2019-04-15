@@ -33,7 +33,10 @@ class Monitor(Wrapper):
         self.rewards_h = None
         self.step_rewards = None
         self.needs_reset = True
-        self.episode_actions = []
+        self.steps = 0
+        self.last_obs = None
+        self.episode_actions = None
+        self.episode_obs = None
         self.episode_rewards = []
         self.episode_lengths = []
         self.episode_times = []
@@ -47,16 +50,20 @@ class Monitor(Wrapper):
             if v is None:
                 raise ValueError('Expected you to pass kwarg %s into reset'%k)
             self.current_reset_info[k] = v
-        return self.env.reset(**kwargs)
+        self.last_obs = self.env.reset(**kwargs)
+        return self.last_obs
 
     def reset_state(self):
         if not self.allow_early_resets and not self.needs_reset:
             raise RuntimeError("Tried to reset an environment before done. If you want to allow early resets, wrap your env with Monitor(env, path, allow_early_resets=True)")
+        self.steps = 0
+        self.last_obs = None
         self.rewards = []
-        self.reward_h = []
-        self.reward_v = []
+        self.rewards_h = []
+        self.rewards_v = []
         self.step_rewards = []
         self.episode_actions = []
+        self.episode_obs = []
         self.needs_reset = False
 
 
@@ -66,19 +73,22 @@ class Monitor(Wrapper):
         ob, rew, done, info = self.env.step(action)
 
         # log per-step parameters - Daniel
-        self.episode_actions.append(action[0])
         logger.logkv("step_reward", info["step_reward"])
 
-        self.update(ob, rew, done, info)
+        self.update(ob, rew, done, info, action[0])
 
         logger.dumpkvs()
         return (ob, rew, done, info)
 
-    def update(self, ob, rew, done, info):
+    def update(self, ob, rew, done, info, ac):
+        self.steps += 1
         self.rewards.append(rew)
         self.step_rewards.append(info["step_reward"])
         self.rewards_v.append(info['r_v'])
         self.rewards_h.append(info['r_h'])
+        self.episode_actions.append(ac)
+        self.episode_obs.append(self.last_obs)
+        self.last_obs = ob
         if done:
             self.needs_reset = True
             eprew = sum(self.rewards)
@@ -86,7 +96,11 @@ class Monitor(Wrapper):
             eprew_v = sum(self.rewards_v)
             taskrew = sum(self.step_rewards)
             eplen = len(self.rewards)
-            epinfo = {"r": round(eprew, 6), "l": eplen, "t": round(time.time() - self.tstart, 6)}
+            epinfo = {"r": round(eprew, 6),
+                      "l": eplen,
+                      "t": round(time.time() - self.tstart, 6),
+                      "a": self.episode_actions,
+                      "o": self.episode_obs}
             for k in self.info_keywords:
                 epinfo[k] = info[k]
             self.episode_rewards.append(eprew)
@@ -133,6 +147,7 @@ class LoadMonitorResultsError(Exception):
 
 class ResultsWriter(object):
     def __init__(self, filename=None, header='', extra_keys=()):
+        self.DEFAULT_KEYS = ('r', 'l', 't', 'a', 'o')
         self.extra_keys = extra_keys
         if filename is None:
             self.f = None
@@ -147,7 +162,7 @@ class ResultsWriter(object):
             if isinstance(header, dict):
                 header = '# {} \n'.format(json.dumps(header))
             self.f.write(header)
-            self.logger = csv.DictWriter(self.f, fieldnames=('r', 'l', 't')+tuple(extra_keys))
+            self.logger = csv.DictWriter(self.f, fieldnames=self.DEFAULT_KEYS+tuple(extra_keys))
             self.logger.writeheader()
             self.f.flush()
 
