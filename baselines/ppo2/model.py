@@ -33,13 +33,15 @@ class Model(object):
     - Save load the model
     """
     def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
-                nsteps, ent_coef, vf_coef, max_grad_norm, microbatch_size=None):
+                nsteps, ent_coef, vf_coef, max_grad_norm, microbatch_size=None,
+                var_scope='ppo2_model'):
         self.sess = sess = get_session()
         # add a summary writer - Daniel
         logdir = logger.get_dir()
         self.writer = tf.summary.FileWriter(logdir, sess.graph)
+        self.log_step = 0
 
-        with tf.variable_scope('ppo2_model', reuse=tf.AUTO_REUSE):
+        with tf.variable_scope(var_scope, reuse=tf.AUTO_REUSE):
             # CREATE OUR TWO MODELS
             # act_model that is used for sampling
             act_model = policy(nbatch_act, 1, sess)
@@ -100,7 +102,7 @@ class Model(object):
 
         # UPDATE THE PARAMETERS USING LOSS
         # 1. Get the model parameters
-        params = tf.trainable_variables('ppo2_model')
+        params = tf.trainable_variables(var_scope)
         # 2. Build our trainer
         if MPI is not None:
             self.trainer = MpiAdamOptimizer(MPI.COMM_WORLD, learning_rate=LR, epsilon=1e-5)
@@ -117,6 +119,10 @@ class Model(object):
         # zip aggregate each gradient with parameters associated
         # For instance zip(ABCD, xyza) => Ax, By, Cz, Da
 
+        # tf.summary.histogram('obs_v', train_model.X[:,0])
+        # tf.summary.histogram('obs_h', train_model.X[:,1])
+        # self.summaries = tf.summary.merge_all()
+
         self.grads = grads
         self.var = var
         self._train_op = self.trainer.apply_gradients(grads_and_var)
@@ -131,8 +137,6 @@ class Model(object):
 
         self.pretrain_loss = tf.losses.mean_squared_error(train_model.pi, self.A)
         self.pretrain_op = self.trainer.minimize(self.pretrain_loss, None, params)
-
-        self.summaries = tf.summary.merge_all()
 
         self.save = functools.partial(save_variables, sess=sess)
         self.load = functools.partial(load_variables, sess=sess)
@@ -155,6 +159,9 @@ class Model(object):
         }
 
         self.sess.run(self.pretrain_op, feed_dict)
+        debug_prediction = self.evaluate(obs[0])
+        print("DEBUG obs: " + str(obs[0]))
+        print("DEBUG prediction: " + str(debug_prediction))
         loss = self.sess.run(self.pretrain_loss, feed_dict)
         print("Pretrain loss: " + str(loss))
 
@@ -195,9 +202,9 @@ class Model(object):
         )[:-1]
 
 
-    def summary(self, obs):
+    def summary(self, actions):
         feed_dict = {
-            self.train_model.X : obs,
-            self.act_model.X : obs
+            self.A : actions,
         }
+
         return self.sess.run(self.summaries, feed_dict)
