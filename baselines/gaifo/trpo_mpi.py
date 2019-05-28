@@ -22,12 +22,16 @@ from baselines.gail.statistics import stats
 
 def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
 
+    num_envs = env.num_envs
+
+    assert(horizon % num_envs == 0, "Horizon must be a multiply of num_envs")
+
     # Initialize state variables
     t = 0
-    ac = env.action_space.sample()
-    new = True
-    rew = 0.0
-    true_rew = 0.0
+    ac = [env.action_space.sample() for _ in range(num_envs)]
+    new = [True for _ in range(num_envs)]
+    rew = [0.0 for _ in range(num_envs)]
+    true_rew = [0.0 for _ in range(num_envs)]
     ob = env.reset()
 
     cur_ep_ret = 0
@@ -39,10 +43,10 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
 
     # Initialize history arrays
     obs = np.array([ob for _ in range(horizon)])
-    true_rews = np.zeros(horizon, 'float32')
-    rews = np.zeros(horizon, 'float32')
-    vpreds = np.zeros(horizon, 'float32')
-    news = np.zeros(horizon, 'int32')
+    true_rews = np.zeros((num_envs, horizon), 'float32')
+    rews = np.zeros((num_envs, horizon), 'float32')
+    vpreds = np.zeros((num_envs, horizon), 'float32')
+    news = np.zeros((num_envs, horizon), 'int32')
     acs = np.array([ac for _ in range(horizon)])
     prevacs = acs.copy()
 
@@ -69,23 +73,34 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
         acs[i] = ac
         prevacs[i] = prevac
 
-        rew = reward_giver.get_reward(ob, ac)
-        ob, true_rew, new, _ = env.step(ac)
+        # rew generation is reversed for gaifo, it needs to now next
+        # observations
+        # assumes that data are returned in the same order each time
+        ob_next, true_rews, new, _ = env.step(ac)
+        rew = reward_giver.get_reward(ob, ob_next)
+        ob = ob_next
         rews[i] = rew
         true_rews[i] = true_rew
 
-        cur_ep_ret += rew
-        cur_ep_true_ret += true_rew
+        # true returns are only informative. GAIL is not using them to update
+        # models
+
+        # FIXME: is 0th ep enough?
+        cur_ep_ret += rew[0]
+        cur_ep_true_ret += true_rew[0]
         cur_ep_len += 1
-        if new:
+        if new[0]:
             ep_rets.append(cur_ep_ret)
             ep_true_rets.append(cur_ep_true_ret)
             ep_lens.append(cur_ep_len)
             cur_ep_ret = 0
             cur_ep_true_ret = 0
             cur_ep_len = 0
+
+        if all(new):
             ob = env.reset()
-        t += 1
+
+        t += num_envs
 
 
 def add_vtarg_and_adv(seg, gamma, lam):
@@ -112,6 +127,8 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
           max_timesteps=0, max_episodes=0, max_iters=0,
           callback=None
           ):
+
+    num_envs = env.num_envs
 
     nworkers = MPI.COMM_WORLD.Get_size()
     rank = MPI.COMM_WORLD.Get_rank()
@@ -251,7 +268,8 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
             vpredbefore = seg["vpred"]  # predicted value function before udpate
             atarg = (atarg - atarg.mean()) / atarg.std()  # standardized advantage function estimate
 
-            if hasattr(pi, "ob_rms"): pi.ob_rms.update(ob)  # update running mean/std for policy
+            if hasattr(pi, "ob_rms"):
+                pi.ob_rms.update(ob.flatten())  # update running mean/std for policy
 
             args = seg["ob"], seg["ac"], atarg
             fvpargs = [arr[::5] for arr in args]
@@ -299,7 +317,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
                     assert all(np.allclose(ps, paramsums[0]) for ps in paramsums[1:])
             with timed("vf"):
                 for _ in range(vf_iters):
-                    for (mbob, mbret) in dataset.iterbatches((seg["ob"], seg["tdlamret"]),
+                    for (mbob, mbret) in dataset.iterbatches((seg["ob"].flatten(), seg["tdlamret"]),
                                                              include_final_partial_batch=False, batch_size=128):
                         if hasattr(pi, "ob_rms"):
                             pi.ob_rms.update(mbob)  # update running mean/std for policy
@@ -313,17 +331,26 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
         # ------------------ Update D ------------------
         logger.log("Optimizing Discriminator...")
         logger.log(fmt_row(13, reward_giver.loss_name))
+
         # TODO: pass correct episode index here
-        ob_expert, obn_expert = expert_dataset.get_next_batch(len(ob), 0)
-        batch_size = len(ob) // d_step
+        ob_expert, obn_expert = expert_dataset.get_next_batch(timesteps_per_batch, 0)
+        batch_size = timesteps_per_batch // d_step
         d_losses = []  # list of tuples, each of which gives the loss for a minibatch
-        for ob_batch, ac_batch in dataset.iterbatches((ob, ac),
+
+        # ob_t[i] => ob_tn[i] is one transition
+        ob_t = ob[:-1].flatten()
+        ob_tn = ob[1:].flatten()
+        for ob_batch, obn_batch in dataset.iterbatches((ob_t, ob_tn),
                                                       include_final_partial_batch=False,
                                                       batch_size=batch_size):
-            ob_expert, ac_expert = expert_dataset.get_next_batch(len(ob_batch))
+            ob_expert, obn_expert = expert_dataset.get_next_batch(batch_size)
             # update running mean/std for reward_giver
-            if hasattr(reward_giver, "obs_rms"): reward_giver.obs_rms.update(np.concatenate((ob_batch, ob_expert), 0))
-            *newlosses, g = reward_giver.lossandgrad(ob_batch, ac_batch, ob_expert, ac_expert)
+            if hasattr(reward_giver, "obs_rms"):
+                ob_all = np.concatenate((ob_batch, obn_batch), 0)
+                ob_all = np.concatenate((ob_all, ob_expert), 0)
+                ob_all = np.concatenate((ob_all, obn_expert), 0)
+                reward_giver.obs_rms.update(ob_all)
+            *newlosses, g = reward_giver.lossandgrad(ob_batch, obn_batch, ob_expert, obn_expert)
             d_adam.update(allmean(g), d_stepsize)
             d_losses.append(newlosses)
         logger.log(fmt_row(13, np.mean(d_losses, axis=0)))

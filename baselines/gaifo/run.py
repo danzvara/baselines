@@ -80,9 +80,9 @@ def main(args):
         return mlp_policy.MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
                                     reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=2)
 
-    # TODO: vecMonitor
-    env = bench.Monitor(env, logger.get_dir() and
+    env = VecMonitor(env, logger.get_dir() and
                         osp.join(logger.get_dir(), "monitor.json"))
+
     env.seed(args.seed)
     gym.logger.setLevel(logging.WARN)
     task_name = get_task_name(args)
@@ -125,7 +125,7 @@ def main(args):
 
 def train(env, seed, policy_fn, reward_giver, dataset, algo,
           g_step, d_step, policy_entcoeff, num_timesteps, save_per_iter,
-          checkpoint_dir, log_dir, pretrained, BC_max_iter, task_name=None):
+          checkpoint_dir, log_dir, pretrained=False, BC_max_iter, task_name=None):
 
     pretrained_weight = None
     if pretrained and (BC_max_iter > 0):
