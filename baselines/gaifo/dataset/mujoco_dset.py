@@ -7,6 +7,41 @@ a transition can be: (data['obs'][t], data['acs'][t], data['obs'][t+1]) and get 
 
 from baselines import logger
 import numpy as np
+import sys
+import csv
+
+class DsetFileTools(object):
+    def __init__(self):
+        pass
+
+    def loadFromCsv(self, filename, hasFormatLine=True):
+        file = open(filename, 'r')
+        reader = csv.reader(file)
+        if hasFormatLine: reader.__next__()
+        data = list(reader)
+        return data
+
+    def loadRollouts(self, data, initKeyword="INIT"):
+        rollouts = []
+        rets = []
+        r = {"init": None, "obs": []}
+        for d in data:
+            if initKeyword and len(d) > 0 and d[0] == initKeyword:
+                r["init"] = list(map(float, d[1:]))
+            elif len(d) > 0 and d[0] == "EOE":
+                rollouts.append(r)
+                rets.append(float(d[1]))
+                r = {"init": None, "obs": []}
+            elif len(d) > 0:
+                r["obs"].append(list(map(float, d)))
+            else:
+                sys.exit("Empty line in rollout file encountered")
+
+        return rollouts
+
+
+    def saveRolloutsNpz(self, rollouts):
+        np.save(rollouts)
 
 
 class Dset(object):
@@ -47,16 +82,18 @@ class Gaifo_Dset(object):
 
         self.obs = traj_data['obs'][:traj_limitation]
         self.rets = traj_data['ep_rets'][:traj_limitation]
+        self.inits = traj_data['inits'][:traj_limitation]
         self.avg_ret = sum(self.rets)/len(self.rets)
         self.std_ret = np.std(np.array(self.rets))
         self.num_traj = min(traj_limitation, len(traj_data['obs']))
-        self.num_transitions = sum(list(map(len, obs)))
+        self.num_transition = sum(list(map(len, self.obs)))
         self.randomize = randomize
 
         self.dsets = []
         for episode in self.obs:
+            episode = np.array(episode)
             eplen = len(episode)
-            dset = Dset(episode[:eplen - 1], episode[1:], randomize)
+            dset = Dset(episode[:-1,:], episode[1:,:], randomize)
             self.dsets.append(dset)
 
         self.log_info()
