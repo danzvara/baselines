@@ -92,7 +92,6 @@ class Gaifo_Dset(object):
         self.dsets = []
         for episode in self.obs:
             episode = np.array(episode)
-            eplen = len(episode)
             dset = Dset(episode[:-1,:], episode[1:,:], randomize)
             self.dsets.append(dset)
 
@@ -104,8 +103,16 @@ class Gaifo_Dset(object):
         plt.savefig("histogram_rets.png")
         plt.close()
 
-    def get_next_batch(self, batch_size, episode_idx):
-        return self.dsets[episode_idx].get_next_batch(batch_size)
+    def get_next_batch(self, batch_size):
+        ep_idx = np.random.randint(len(self.obs))
+        ob, obn = self.dsets[ep_idx].get_next_batch(batch_size)
+        while len(ob) < batch_size:
+            ep_idx = np.random.randint(len(self.obs))
+            ob_, obn_ = self.dsets[ep_idx].get_next_batch(batch_size)
+            ob = np.concatenate((ob, ob_), 0)
+            obn = np.concatenate((obn, obn_), 0)
+
+        return ob, obn
 
     def log_info(self):
         logger.log("Total trajectorues: %d" % self.num_traj)

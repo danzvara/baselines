@@ -78,6 +78,9 @@ class TransitionClassifier(object):
         sess = tf.get_default_session()
         if len(obs.shape) == 1:
             obs = np.expand_dims(obs, 0)
+        if len(obsn.shape) == 1:
+            obsn = np.expand_dims(obsn, 0)
+
         feed_dict = {self.generator_obs_ph: obs, self.generator_obsn_ph: obsn}
         reward = sess.run(self.reward_op, feed_dict)
         return reward

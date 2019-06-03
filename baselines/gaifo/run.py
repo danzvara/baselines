@@ -6,28 +6,30 @@ Adversarial Imitation from Observations).
 '''
 
 import argparse
+import os
 import os.path as osp
 import logging
 from mpi4py import MPI
 from tqdm import tqdm
 
 import numpy as np
+import isaacenv
 import gym
 
-from baselines.gail import mlp_policy
 from baselines.common import set_global_seeds, tf_util as U
+from baselines.common.vec_env import VecMonitor
 from baselines.common.misc_util import boolean_flag
-from baselines import bench
 from baselines import logger
-from baselines.gail.dataset.mujoco_dset import Gaifo_Dset
-from baselines.gail.adversary import TransitionClassifier
+from baselines.gaifo.dataset.mujoco_dset import Gaifo_Dset
+from baselines.gaifo.adversary import TransitionClassifier
+from baselines.gaifo import mlp_policy
 
 
 def argsparser():
     parser = argparse.ArgumentParser("Tensorflow Implementation of GAIL")
-    parser.add_argument('--env_id', help='environment ID', default='Hopper-v2')
+    parser.add_argument('--env_id', help='environment ID', default='ImitationGAIL-v0')
     parser.add_argument('--seed', help='RNG seed', type=int, default=0)
-    parser.add_argument('--expert_path', type=str, default='data/deterministic.trpo.Hopper.0.00.npz')
+    parser.add_argument('--expert_path', type=str, default='data/contact_record-2019-05-29-15-21-10-859816.npz')
     parser.add_argument('--checkpoint_dir', help='the directory to save model', default='checkpoint')
     parser.add_argument('--log_dir', help='the directory to save log file', default='log')
     parser.add_argument('--load_model_path', help='if provided, load the model', type=str, default=None)
@@ -37,10 +39,10 @@ def argsparser():
     boolean_flag(parser, 'stochastic_policy', default=False, help='use stochastic/deterministic policy to evaluate')
     boolean_flag(parser, 'save_sample', default=False, help='save the trajectories or not')
     #  Mujoco Dataset Configuration
-    parser.add_argument('--traj_limitation', type=int, default=-1)
+    parser.add_argument('--traj_limitation', type=int, default=10)
     # Optimization Configuration
     parser.add_argument('--g_step', help='number of steps to train policy in each epoch', type=int, default=3)
-    parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=1)
+    parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=10)
     # Network Configuration (Using MLP Policy)
     parser.add_argument('--policy_hidden_size', type=int, default=100)
     parser.add_argument('--adversary_hidden_size', type=int, default=100)
@@ -72,9 +74,12 @@ def get_task_name(args):
 
 
 def main(args):
+    os.environ['OPENAI_LOGDIR'] = '/home/daniel/Work/logs'
+    os.environ['OPENAI_LOG_FORMAT'] = 'csv,log,stdout,tensorboard'
+
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(args.seed)
-    env = gym.make(args.env_id)
+    env = isaacenv.make(args.env_id, num_envs=16, spacing=0.5)
 
     def policy_fn(name, ob_space, ac_space, reuse=False):
         return mlp_policy.MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
@@ -83,7 +88,6 @@ def main(args):
     env = VecMonitor(env, logger.get_dir() and
                         osp.join(logger.get_dir(), "monitor.json"))
 
-    env.seed(args.seed)
     gym.logger.setLevel(logging.WARN)
     task_name = get_task_name(args)
     args.checkpoint_dir = osp.join(args.checkpoint_dir, task_name)
@@ -125,24 +129,24 @@ def main(args):
 
 def train(env, seed, policy_fn, reward_giver, dataset, algo,
           g_step, d_step, policy_entcoeff, num_timesteps, save_per_iter,
-          checkpoint_dir, log_dir, pretrained=False, BC_max_iter, task_name=None):
+          checkpoint_dir, log_dir, pretrained=False, BC_max_iter=1e4, task_name=None):
 
     pretrained_weight = None
     if pretrained and (BC_max_iter > 0):
         # Pretrain with behavior cloning
-        from baselines.gail import behavior_clone
+        from baselines.gaifo import behavior_clone
         pretrained_weight = behavior_clone.learn(env, policy_fn, dataset,
                                                  max_iters=BC_max_iter)
 
     if algo == 'trpo':
-        from baselines.gail import trpo_mpi
+        from baselines.gaifo import trpo_mpi
         # Set up for MPI seed
         rank = MPI.COMM_WORLD.Get_rank()
         if rank != 0:
             logger.set_level(logger.DISABLED)
         workerseed = seed + 10000 * MPI.COMM_WORLD.Get_rank()
         set_global_seeds(workerseed)
-        env.seed(workerseed)
+        #env.seed(workerseed)
         trpo_mpi.learn(env, policy_fn, reward_giver, dataset, rank,
                        pretrained=pretrained, pretrained_weight=pretrained_weight,
                        g_step=g_step, d_step=d_step,
@@ -150,7 +154,7 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
                        max_timesteps=num_timesteps,
                        ckpt_dir=checkpoint_dir, log_dir=log_dir,
                        save_per_iter=save_per_iter,
-                       timesteps_per_batch=1024,
+                       timesteps_per_batch=64,
                        max_kl=0.01, cg_iters=10, cg_damping=0.1,
                        gamma=0.995, lam=0.97,
                        vf_iters=5, vf_stepsize=1e-3,
