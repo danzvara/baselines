@@ -26,8 +26,11 @@ class VecMonitor(VecEnvWrapper):
         self.eplens = np.zeros(self.num_envs, 'i')
         return obs
 
-    def step_wait(self):
-        obs, rews, dones, infos = self.venv.step_wait()
+    # WIP (Daniel)
+    # def step_wait(self):
+    def step(self, actions):
+        # obs, rews, dones, infos = self.venv.step_wait()
+        obs, rews, dones, infos = self.venv.step(actions)
         self.eprets += rews
         self.eplens += 1
         newinfos = []
@@ -47,3 +50,7 @@ class VecMonitor(VecEnvWrapper):
             newinfos.append(info)
 
         return obs, rews, dones, newinfos
+
+    # (Daniel) Ignore step wait
+    def step_wait(self):
+        pass
