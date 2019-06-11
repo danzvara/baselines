@@ -28,7 +28,7 @@ def nature_cnn(unscaled_images, **conv_kwargs):
 
 
 @register("mlp")
-def mlp(num_layers=4, num_hidden=64, activation=tf.tanh, layer_norm=False):
+def mlp(num_layers=3, num_hidden=256, activation=tf.tanh, layer_norm=False):
     """
     Stack of fully-connected layers to be used in a policy / q-function approximator
 
@@ -46,6 +46,49 @@ def mlp(num_layers=4, num_hidden=64, activation=tf.tanh, layer_norm=False):
 
     function that builds fully connected network with a given input tensor / placeholder
     """
+    def network_fn(X):
+        h = tf.layers.flatten(X)
+        for i in range(num_layers):
+            h = fc(h, 'mlp_fc{}'.format(i), nh=num_hidden, init_scale=np.sqrt(2))
+            if layer_norm:
+                h = tf.contrib.layers.layer_norm(h, center=True, scale=True)
+            h = activation(h)
+
+        return h
+
+    return network_fn
+
+@register("mlp-capler")
+def mlp(num_layers=2, num_hidden=128, activation=tf.tanh, layer_norm=False):
+    def network_fn(X):
+        h = tf.layers.flatten(X)
+        for i in range(num_layers):
+            h = fc(h, 'mlp_fc{}'.format(i), nh=num_hidden, init_scale=np.sqrt(2))
+            if layer_norm:
+                h = tf.contrib.layers.layer_norm(h, center=True, scale=True)
+            h = activation(h)
+
+        return h
+
+    return network_fn
+
+
+@register("mlp-hopper")
+def mlp(num_layers=3, num_hidden=64, activation=tf.tanh, layer_norm=False):
+    def network_fn(X):
+        h = tf.layers.flatten(X)
+        for i in range(num_layers):
+            h = fc(h, 'mlp_fc{}'.format(i), nh=num_hidden, init_scale=np.sqrt(2))
+            if layer_norm:
+                h = tf.contrib.layers.layer_norm(h, center=True, scale=True)
+            h = activation(h)
+
+        return h
+
+    return network_fn
+
+@register("mlp-gaifo")
+def mlp(num_layers=2, num_hidden=100, activation=tf.tanh, layer_norm=False):
     def network_fn(X):
         h = tf.layers.flatten(X)
         for i in range(num_layers):
@@ -81,7 +124,7 @@ def cnn_small(**conv_kwargs):
 
 
 @register("lstm")
-def lstm(nlstm=128, layer_norm=False):
+def lstm(nlstm=8, layer_norm=False):
     """
     Builds LSTM (Long-Short Term Memory) network to be used in a policy.
     Note that the resulting function returns not only the output of the LSTM
