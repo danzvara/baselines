@@ -15,7 +15,7 @@ class PolicyWithValue(object):
     Encapsulates fields and methods for RL policy and value function estimation with shared parameters
     """
 
-    def __init__(self, env, observations, latent, estimate_q=False, vf_latent=None, sess=None, **tensors):
+    def __init__(self, ac_space, ob_space, observations, latent, estimate_q=False, vf_latent=None, sess=None, **tensors):
         """
         Parameters:
         ----------
@@ -44,7 +44,7 @@ class PolicyWithValue(object):
         latent = tf.layers.flatten(latent)
 
         # Based on the action space, will select what probability distribution type
-        self.pdtype = make_pdtype(env.action_space)
+        self.pdtype = make_pdtype(ac_space)
 
         self.pd, self.pi = self.pdtype.pdfromlatent(latent, init_scale=0.01)
 
@@ -56,8 +56,8 @@ class PolicyWithValue(object):
         self.sess = sess or tf.get_default_session()
 
         if estimate_q:
-            assert isinstance(env.action_space, gym.spaces.Discrete)
-            self.q = fc(vf_latent, 'q', env.action_space.n)
+            assert isinstance(ac_space, gym.spaces.Discrete)
+            self.q = fc(vf_latent, 'q', ac_space.n)
             self.vf = self.q
         else:
             self.vf = fc(vf_latent, 'vf', 1)
@@ -89,7 +89,6 @@ class PolicyWithValue(object):
         -------
         (action, value estimate, next state, negative log likelihood of the action under current policy parameters) tuple
         """
-
         a, v, state, neglogp = self._evaluate([self.action, self.vf, self.state, self.neglogp], observation, **extra_feed)
         if state.size == 0:
             state = None
@@ -118,13 +117,19 @@ class PolicyWithValue(object):
     def load(self, load_path):
         tf_util.load_state(load_path, sess=self.sess)
 
-def build_policy(env, policy_network, value_network=None,  normalize_observations=False, estimate_q=False, **policy_kwargs):
+
+def build_policy(env, policy_network, value_network=None, normalize_observations=True, estimate_q=False, **policy_kwargs):
+    return build_policy_noenv(env.action_space, env.observation_space, policy_network, value_network, normalize_observations, estimate_q, **policy_kwargs)
+
+
+def build_policy_noenv(action_space, observation_space, policy_network, value_network=None, normalize_observations=True, estimate_q=False, **policy_kwargs):
     if isinstance(policy_network, str):
         network_type = policy_network
         policy_network = get_network_builder(network_type)(**policy_kwargs)
 
     def policy_fn(nbatch=None, nsteps=None, sess=None, observ_placeholder=None):
-        ob_space = env.observation_space
+        ob_space = observation_space
+        ac_space = action_space
 
         X = observ_placeholder if observ_placeholder is not None else observation_placeholder(ob_space, batch_size=nbatch)
 
@@ -150,7 +155,6 @@ def build_policy(env, policy_network, value_network=None,  normalize_observation
                     policy_latent, recurrent_tensors = policy_network(encoded_x, nenv)
                     extra_tensors.update(recurrent_tensors)
 
-
         _v_net = value_network
 
         if _v_net is None or _v_net == 'shared':
@@ -166,7 +170,8 @@ def build_policy(env, policy_network, value_network=None,  normalize_observation
                 vf_latent = _v_net(encoded_x)
 
         policy = PolicyWithValue(
-            env=env,
+            ac_space=ac_space,
+            ob_space=ob_space,
             observations=X,
             latent=policy_latent,
             vf_latent=vf_latent,
