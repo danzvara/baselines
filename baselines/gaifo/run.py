@@ -22,7 +22,7 @@ from baselines.common.misc_util import boolean_flag
 from baselines import logger
 from baselines.gaifo.dataset.mujoco_dset import Gaifo_Dset
 from baselines.gaifo.adversary import TransitionClassifier
-from baselines.gaifo import mlp_policy
+from baselines.gaifo import mlp_policy, lstm_policy
 
 from baselines.gaifo.run_hopper import HopperRunner
 
@@ -40,10 +40,10 @@ def argsparser():
     boolean_flag(parser, 'stochastic_policy', default=False, help='use stochastic/deterministic policy to evaluate')
     boolean_flag(parser, 'save_sample', default=False, help='save the trajectories or not')
     #  Mujoco Dataset Configuration
-    parser.add_argument('--traj_limitation', type=int, default=20)
+    parser.add_argument('--traj_limitation', type=int, default=10)
     # Optimization Configuration
-    parser.add_argument('--g_step', help='number of steps to train policy in each epoch', type=int, default=3)
-    parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=10)
+    parser.add_argument('--g_step', help='number of steps to train policy in each epoch', type=int, default=1)
+    parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=5)
     # Network Configuration (Using MLP Policy)
     parser.add_argument('--policy_hidden_size', type=int, default=100)
     parser.add_argument('--adversary_hidden_size', type=int, default=100)
@@ -80,7 +80,7 @@ def main(args):
 
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(args.seed)
-    env = isaacenv.make(args.env_id, num_envs=16, spacing=0.5)
+    env = isaacenv.make(args.env_id, num_envs=1, spacing=0.5)
 
     def policy_fn(name, ob_space, ac_space, reuse=False):
         return mlp_policy.MlpPolicy(name=name, ob_space=ob_space, ac_space=ac_space,
@@ -155,6 +155,14 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
                        gamma=0.995, lam=0.97,
                        vf_iters=5, vf_stepsize=1e-3,
                        task_name=task_name)
+    elif algo == 'ppo':
+        from baselines.gaifo import ppo
+        ppo.learn(network='lstm',
+                  env=env,
+                  reward_giver=reward_giver,
+                  expert_dataset=dataset,
+                  total_timesteps=5e6,
+                  g_step=g_step, d_step=d_step)
     else:
         raise NotImplementedError
 
