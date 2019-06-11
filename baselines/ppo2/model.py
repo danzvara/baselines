@@ -1,8 +1,11 @@
 import tensorflow as tf
 import functools
+import time
 
 from baselines.common.tf_util import get_session, save_variables, load_variables
 from baselines.common.tf_util import initialize
+from baselines.common import colorize
+from contextlib import contextmanager
 
 from baselines import logger
 
@@ -12,6 +15,15 @@ try:
     from baselines.common.mpi_util import sync_from_root
 except ImportError:
     MPI = None
+
+
+@contextmanager
+def timed(msg):
+    print(colorize(msg, color='magenta'))
+    tstart = time.time()
+    yield
+    print(colorize("done in %.3f seconds" % (time.time() - tstart), color='magenta'))
+
 
 class Model(object):
     """
@@ -38,19 +50,21 @@ class Model(object):
         self.sess = sess = get_session()
         # add a summary writer - Daniel
         logdir = logger.get_dir()
-        self.writer = tf.summary.FileWriter(logdir, sess.graph)
+        with timed("Creting summary writer"):
+            self.writer = tf.summary.FileWriter(logdir, sess.graph)
         self.log_step = 0
 
-        with tf.variable_scope(var_scope, reuse=tf.AUTO_REUSE):
-            # CREATE OUR TWO MODELS
-            # act_model that is used for sampling
-            act_model = policy(nbatch_act, 1, sess)
+        with timed("Instantiate model policy"):
+            with tf.variable_scope(var_scope, reuse=tf.AUTO_REUSE):
+                # CREATE OUR TWO MODELS
+                # act_model that is used for sampling
+                act_model = policy(nbatch_act, 1, sess)
 
-            # Train model for training
-            if microbatch_size is None:
-                train_model = policy(nbatch_train, nsteps, sess)
-            else:
-                train_model = policy(microbatch_size, nsteps, sess)
+                # Train model for training
+                if microbatch_size is None:
+                    train_model = policy(nbatch_train, nsteps, sess)
+                else:
+                    train_model = policy(microbatch_size, nsteps, sess)
 
         # CREATE THE PLACEHOLDERS
         self.A = A = train_model.pdtype.sample_placeholder([None])
@@ -141,7 +155,8 @@ class Model(object):
         self.save = functools.partial(save_variables, sess=sess)
         self.load = functools.partial(load_variables, sess=sess)
 
-        initialize()
+        with timed("TF init"):
+            initialize()
         global_variables = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope="")
         if MPI is not None:
             sync_from_root(sess, global_variables) #pylint: disable=E1101
